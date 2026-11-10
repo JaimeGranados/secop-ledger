@@ -1,0 +1,26 @@
+# Data: never in Git (big files, and it can contain personal IDs)
+data/
+*.parquet
+*.duckdb
+*.duckdb.wal
+
+# Secrets (API token, HMAC key)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# dbt
+target/
+dbt_packages/
+logs/
+
+# Editors and OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
