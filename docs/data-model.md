@@ -16,6 +16,28 @@ result in the README.
 | Q4 | Which statuses do contracts move through, and how long do they stay in each one? | `estado_contrato`, `ultima_actualizacion` | `fct_contract_changes` |
 | Q5 | How dirty is the source every day? (duplicates, rejected rows, changes the source did not date) | all | `fct_daily_quality` |
 
+### Headline number for each question
+Each answer ends in **one sentence with a real, measured number** for the top of the README.
+The `X` values are filled only after the pipeline has measured them. No number is estimated or invented.
+
+| # | Headline (template) |
+|---|---|
+| Q1 | "X% of contracts signed in 2025 changed after signing; the top 10 entities account for Y% of all changes." |
+| Q2 | "Contracts got X added days on average; in sector S it was Y days." |
+| Q3 | "After 6 months, contracts had X% of their value paid (median)." |
+| Q4 | "Contracts spend a median of X days in status S before they close." |
+| Q5 | "The source sends X duplicate rows and Y undated changes per day; the pipeline counts none of them twice." |
+
+### Pipeline numbers (also for the README)
+Measured by the pipeline itself and stored in `fct_daily_quality` and the run logs:
+
+- Rows processed per run, and total contracts tracked.
+- Contract changes captured since the first run (history the source does not keep).
+- Duplicate rows blocked, and rows sent to quarantine.
+- Reconciliation: % of source rows explained (silver + quarantine = raw).
+- Run time and cost per run ($0).
+- Days of history collected without a gap.
+
 > **What the data does not prove.** A modified contract or added days are normal in public
 > contracting. These numbers describe facts; they are not evidence that anything was done wrong.
 
