@@ -68,11 +68,32 @@ A change in any other column (for example a typo fixed in the description) updat
 does **not** open a new version. Reason: versions must mean a business change, not noise.
 
 ### Change detection
-1. **Incremental pull:** records with `ultima_actualizacion > last watermark - 7 days`.
-   The 7-day lookback covers the source lag (on 2026-11-10 the newest value was 2026-11-05).
-2. **Row hash:** a hash of the tracked columns, compared with the previous snapshot. It catches
-   changes the source did not date (`ultima_actualizacion` is empty in about 38% of rows).
-3. **Weekly full pull** of the slice, to reconcile counts and find deleted records.
+**Version 1: a full snapshot of the slice every day**, then a row hash of the tracked columns
+compared with the previous day's snapshot.
+
+Why not an incremental pull with a watermark (`ultima_actualizacion > last run`)? Measured on
+2026-11-10:
+
+| Signing year | Contracts | With `ultima_actualizacion` |
+|---|---|---|
+| 2025 | 1,017,076 | 632,595 (62%) |
+| 2026 | 952,664 | 339,087 (36%) |
+
+About **half of the slice has no change date**, and the newest value was 5 days old. An incremental
+pull would never see changes to those contracts. Only comparing full snapshots finds them.
+
+Cost of the full pull: one 50,000-row page (all columns) took about 46 s, so the slice
+(about 2M rows) takes roughly 20–30 min per day. That is fine for a daily batch.
+
+**First real run (2026-11-10):** 1,969,740 rows written = 1,969,740 at the source (difference 0),
+79 pages, 26.5 min, **526 MB** of Parquet (zstd). Two free-text columns are 56% of the size:
+`objeto_del_contrato` (154 MB) and `descripcion_del_proceso` (138 MB). That is about 16 GB per
+month, so raw needs a **retention policy**, decided with the silver layer: keep the first full
+snapshot plus a daily table of new or changed rows only, and delete full snapshots after about
+30 days.
+
+Version 2 (an optimization, with a measured reason): add the incremental pull and compare it with
+the full snapshot. The result ("the watermark alone misses X% of the changes") goes in the README.
 
 ## 4. Personal data
 
@@ -84,5 +105,5 @@ need), so it never reaches the disk, the repo or the README.
 | `nombre_*`, `tipo_de_documento_*`, `n_mero_de_documento_*` of the expense officer (ordenador del gasto), payment officer and supervisor | Not pulled |
 | `nombre_representante_legal`, `identificaci_n_representante_legal`, `tipo_de_identificaci_n_representante_legal`, `g_nero_representante_legal`, `domicilio_representante_legal`, `nacionalidad_representante_legal` | Not pulled |
 | `nombre_del_banco`, `tipo_de_cuenta`, `n_mero_de_cuenta` | Not pulled |
-| `documento_proveedor` | Not pulled; `codigo_proveedor` (SECOP's own code) is the supplier key. *To confirm in the spike: it is filled and unique per supplier.* If it is not, use an HMAC of `documento_proveedor` with a secret key from `.env` (a plain hash of a 10-digit ID can be reversed by trying all numbers). |
+| `documento_proveedor` | Not pulled. `codigo_proveedor` (SECOP's own code) is the supplier key: on 2026-11-10 it was filled in 100% of the slice, with 732,852 distinct codes vs. 727,835 distinct documents (almost 1 to 1). So no hash of the personal ID is needed. (A plain hash of a 10-digit ID can be reversed by trying all numbers; if it is ever needed, use an HMAC with a secret key from `.env`.) |
 | `proveedor_adjudicado` (supplier name) | Kept locally (it can be a person's name). The README shows results by **entity**, never by supplier name. |

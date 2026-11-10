@@ -1,0 +1,34 @@
+[project]
+name = "secop-ledger"
+version = "0.1.0"
+description = "History, idempotent loads and reconciliation for Colombian public contracts (SECOP II)."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.32",
+    "pyarrow>=18.0",
+    "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/secop_ledger"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
