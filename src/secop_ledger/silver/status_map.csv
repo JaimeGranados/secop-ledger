@@ -1,0 +1,9 @@
+raw_key,estado,estado_grupo
+aprobado,Aprobado,not_started
+enviado proveedor,Enviado proveedor,not_started
+en ejecución,En ejecución,active
+modificado,Modificado,active
+suspendido,Suspendido,active
+cedido,Cedido,active
+terminado,Terminado,closed
+cerrado,Cerrado,closed

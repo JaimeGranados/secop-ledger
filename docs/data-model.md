@@ -95,7 +95,39 @@ snapshot plus a daily table of new or changed rows only, and delete full snapsho
 Version 2 (an optimization, with a measured reason): add the incremental pull and compare it with
 the full snapshot. The result ("the watermark alone misses X% of the changes") goes in the README.
 
-## 4. Personal data
+## 4. Silver rules (from profiling day 1)
+
+Profile of the raw snapshot of 2026-11-10 (1,969,740 rows), made with
+`uv run python scripts/profile_raw.py`. Every rule below comes from a measured number.
+
+**Principle:** quarantine is only for rows that **can't be used** (no key, or a value that doesn't
+convert to its type). Rows that are usable but **suspicious** stay in silver with a quality flag:
+the course rule "flag outliers, don't delete them". Gold metrics decide whether to exclude
+flagged rows, and say so.
+
+| Dimension | Finding (day 1) | Silver rule |
+|---|---|---|
+| Uniqueness | 111 `id_contrato` appear twice; **all 111 pairs are identical** in every column except `socrata_id` | Keep one row per `id_contrato` (lowest `socrata_id`, deterministic). If copies ever **differ**, quarantine both and fail the quality check: we can't know which one is true. |
+| Validity | 0 values fail the cast: all money is a valid decimal, all dates are valid timestamps | Types: money `DECIMAL(38,2)`, days `BIGINT`, dates `TIMESTAMP`. A value that fails the cast → quarantine (expected 0; a non-zero day means the source changed). |
+| Validity (range) | Values that convert but are impossible: `valor_del_contrato` up to 944 trillion COP; `dias_adicionados` up to 730,577 (2,000 years); `fecha_de_fin_del_contrato` from year 0025 to 5025; `fecha_de_inicio_del_contrato` from 1899 | Flags `flag_implausible_value`, `flag_implausible_date`. Thresholds in one config table, not hidden in SQL. |
+| Consistency | `valor_pendiente_de_pago` < 0: 624 · paid > contract value: 623 · invoiced > value: 889 · end before start: 618 · contract value = 0: 10,182 | Flags (`flag_paid_over_value`, `flag_end_before_start`, ...). Counted every day in `fct_daily_quality`. |
+| Consistency (status) | 7 statuses with mixed capitalization: `En ejecución` 950,165 · `Modificado` 490,778 · `Cerrado` 287,225 · `terminado` 187,965 · `Aprobado` 36,642 · `cedido` 13,514 · `Suspendido` 3,451 | A mapping table (dbt seed): raw text → clean status → group (active / closed). A status that is not in the table fails a test: a new status must be classified by a person, not guessed. |
+| Consistency (placeholders) | `ciudad` = "No Definido": 357,622 (18%) · `departamento`: 36,755 · `orden`: 2 · `tipodocproveedor`: 3,145 | "No Definido" → `NULL` in silver (unknown is unknown; a fake city would be counted as a real one). Gold shows it as "Sin definir". |
+| Consistency (case) | `sector` mixes "deportes" with "Educación Nacional" | Trim spaces; keep the original text; compare and group on a normalized key. |
+| Completeness | Nulls: `fecha_de_notificaci_n_de_prorrogaci_n` 93.6% · liquidation dates 88.7% · `ultima_actualizacion` 50.7% · `fecha_de_inicio_del_contrato` 1.9% · all other columns 0% | Required (null → quarantine): `id_contrato`, `fecha_de_firma`, `valor_del_contrato`, `estado_contrato`. Everything else may be null. |
+| Distribution | `dias_adicionados` > 0 in 440,819 contracts (22.4%); median 60 days, p95 163 days | Baseline for alerts and for Q2. |
+| Privacy | `tipodocproveedor`: 86.6% "Cédula de Ciudadanía" → most suppliers are **people**, not companies | Confirms the rule: results by entity, never by supplier name. |
+
+**First silver build (day 2026-11-10, 76 s):**
+1,969,740 raw = 1,969,629 snapshot + 0 quarantine + 111 duplicate copies removed (0 conflicting
+duplicates). Flags: value zero 10,182 · invoiced over value 889 · negative pending 624 · paid over
+value 623 · end before start 618 · implausible value 45 · implausible date 14.
+
+Design note: a first version copied the 2M rows into DuckDB temporary tables five times and ran
+for more than 10 minutes with 2.8 GB of RAM. The final version uses views, one small decision
+table (id + keep / duplicate / quarantine) and writes the outputs in a stream: 76 s.
+
+## 5. Personal data
 
 Rule: personal data is **removed at ingestion** (the API `$select` only asks for the columns we
 need), so it never reaches the disk, the repo or the README.
