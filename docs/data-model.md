@@ -118,6 +118,15 @@ flagged rows, and say so.
 | Distribution | `dias_adicionados` > 0 in 440,819 contracts (22.4%); median 60 days, p95 163 days | Baseline for alerts and for Q2. |
 | Privacy | `tipodocproveedor`: 86.6% "Cédula de Ciudadanía" → most suppliers are **people**, not companies | Confirms the rule: results by entity, never by supplier name. |
 
+**First silver build (day 2026-11-10, 76 s):**
+1,969,740 raw = 1,969,629 snapshot + 0 quarantine + 111 duplicate copies removed (0 conflicting
+duplicates). Flags: value zero 10,182 · invoiced over value 889 · negative pending 624 · paid over
+value 623 · end before start 618 · implausible value 45 · implausible date 14.
+
+Design note: a first version copied the 2M rows into DuckDB temporary tables five times and ran
+for more than 10 minutes with 2.8 GB of RAM. The final version uses views, one small decision
+table (id + keep / duplicate / quarantine) and writes the outputs in a stream: 76 s.
+
 ## 5. Personal data
 
 Rule: personal data is **removed at ingestion** (the API `$select` only asks for the columns we
