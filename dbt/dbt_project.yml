@@ -10,9 +10,16 @@ test-paths: ["tests"]
 
 clean-targets: ["target", "dbt_packages"]
 
+vars:
+  # dim_date range: covers signing dates (slice starts 2025-01-01) and the days we collect.
+  date_start: "2025-01-01"
+  date_end: "2030-12-31"
+
 models:
   secop_ledger:
     staging:
       +materialized: view  # thin layer over the silver Parquet files, no copy
+    intermediate:
+      +materialized: table  # read once from all snapshots, used by several dims
     marts:
       +materialized: table

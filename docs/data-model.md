@@ -54,10 +54,11 @@ contracts are tracked forever, also after 2025.
 | silver | `contracts_snapshot` | one contract on one ingestion day | `id_contrato`, `ingest_date` |
 | silver | `contracts_quarantine` | one rejected raw record on one ingestion day, with the reason | `ingest_date`, `socrata_id` |
 | silver | `contract_changes` | one contract that is **new, changed or disappeared** compared with the previous snapshot (the first day: every contract, as `baseline`). Unchanged contracts are not stored. Baseline + all events = the full history, so old full snapshots can be deleted. | `id_contrato`, `ingest_date` |
+| gold | `dim_contract` | one contract: what it is and who signed it (current values, SCD Type 1). Links `contract_history` to the other dims. | `id_contrato` |
 | gold | `dim_entity` | one public entity (current values, SCD Type 1) | `entity_key` (from `codigo_entidad`) |
 | gold | `dim_supplier` | one supplier (current values, SCD Type 1) | `supplier_key` (from `codigo_proveedor`) |
 | gold | `dim_date` | one calendar day | `date_key` |
-| gold | `contract_history` | one **version** of one contract: a period where its tracked columns did not change (SCD Type 2) | `contract_version_key`; `valid_from`, `valid_to`, `is_current` |
+| gold | `contract_history` | one **version** of one contract: a period where its tracked columns did not change (SCD Type 2) | `version_key` (`id_contrato@valid_from`); `valid_from`, `valid_to`, `is_current` |
 | gold | `fct_contract_changes` | one detected change of one contract (old value → new value) | `id_contrato`, `changed_on`, `column_name` |
 | gold | `fct_daily_quality` | one ingestion day: rows received, duplicates, rejected, changed, new | `ingest_date` |
 
@@ -139,4 +140,4 @@ need), so it never reaches the disk, the repo or the README.
 | `nombre_representante_legal`, `identificaci_n_representante_legal`, `tipo_de_identificaci_n_representante_legal`, `g_nero_representante_legal`, `domicilio_representante_legal`, `nacionalidad_representante_legal` | Not pulled |
 | `nombre_del_banco`, `tipo_de_cuenta`, `n_mero_de_cuenta` | Not pulled |
 | `documento_proveedor` | Not pulled. `codigo_proveedor` (SECOP's own code) is the supplier key: on 2026-11-10 it was filled in 100% of the slice, with 732,852 distinct codes vs. 727,835 distinct documents (almost 1 to 1). So no hash of the personal ID is needed. (A plain hash of a 10-digit ID can be reversed by trying all numbers; if it is ever needed, use an HMAC with a secret key from `.env`.) |
-| `proveedor_adjudicado` (supplier name) | Kept locally (it can be a person's name). The README shows results by **entity**, never by supplier name. |
+| `proveedor_adjudicado` (supplier name) | Kept locally in silver (it can be a person's name). On 2026-11-21, 91% of suppliers were people (Cédula). **Gold (`dim_supplier`) shows the name only for companies (NIT)**; people get `supplier_kind = 'person'` and no name. A dbt test (`assert_no_person_names_in_gold`) fails if a person's name reaches gold. The README shows results by **entity**, never by supplier name. |
