@@ -52,7 +52,8 @@ contracts are tracked forever, also after 2025.
 |---|---|---|---|
 | raw | `raw/contracts/ingest_date=YYYY-MM-DD/*.parquet` | one record **as the API returned it** on one ingestion day (may contain duplicates) | none (append only) |
 | silver | `contracts_snapshot` | one contract on one ingestion day | `id_contrato`, `ingest_date` |
-| silver | `contracts_quarantine` | one rejected raw record on one ingestion day, with the reason | `ingest_date`, `raw_row_number` |
+| silver | `contracts_quarantine` | one rejected raw record on one ingestion day, with the reason | `ingest_date`, `socrata_id` |
+| silver | `contract_changes` | one contract that is **new, changed or disappeared** compared with the previous snapshot (the first day: every contract, as `baseline`). Unchanged contracts are not stored. Baseline + all events = the full history, so old full snapshots can be deleted. | `id_contrato`, `ingest_date` |
 | gold | `dim_entity` | one public entity (current values, SCD Type 1) | `entity_key` (from `codigo_entidad`) |
 | gold | `dim_supplier` | one supplier (current values, SCD Type 1) | `supplier_key` (from `codigo_proveedor`) |
 | gold | `dim_date` | one calendar day | `date_key` |
