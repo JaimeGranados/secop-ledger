@@ -176,3 +176,19 @@ def test_manifest_is_written(tmp_path):
     m = build(tmp_path, [contract(1)])
     path = silver_dir(tmp_path, "contracts_snapshot", DAY) / "_manifest.json"
     assert json.loads(path.read_text(encoding="utf-8")) == m
+
+
+# --- DuckDB limits -----------------------------------------------------------------------------
+
+def test_duckdb_uses_the_limits_for_a_small_pc(tmp_path, monkeypatch):
+    from secop_ledger.silver import db
+
+    monkeypatch.delenv("SECOP_DUCKDB_THREADS", raising=False)
+    con = db.connect(tmp_path)
+    assert con.sql("SELECT current_setting('threads')").fetchall()[0][0] == db.DEFAULT_THREADS
+
+    monkeypatch.setenv("SECOP_DUCKDB_THREADS", "1")
+    monkeypatch.setenv("SECOP_DUCKDB_MEMORY_LIMIT", "500MB")
+    con = db.connect(tmp_path)
+    assert con.sql("SELECT current_setting('threads')").fetchall()[0][0] == 1
+    assert "MiB" in con.sql("SELECT current_setting('memory_limit')").fetchall()[0][0]

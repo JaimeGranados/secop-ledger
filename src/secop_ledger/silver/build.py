@@ -26,11 +26,9 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-import duckdb
-
 from secop_ledger.config import Settings
 from secop_ledger.ingest.columns import SELECTED_COLUMNS
-from secop_ledger.silver import rules
+from secop_ledger.silver import db, rules
 
 log = logging.getLogger("secop_ledger.silver")
 
@@ -137,9 +135,7 @@ def build_day(data_dir: Path, day: date) -> dict[str, Any]:
     The decisions (keep / duplicate / quarantine) live in one small table with no texts.
     """
     raw_files = (raw_dir(data_dir, day) / "*.parquet").as_posix()
-    con = duckdb.connect()
-    con.sql("SET preserve_insertion_order = false")  # lets DuckDB stream big COPY statements
-    con.sql(f"SET temp_directory = '{(data_dir / '.duckdb_tmp').as_posix()}'")
+    con = db.connect(data_dir)  # memory and thread limits, spill folder
 
     con.sql(f"CREATE VIEW src AS SELECT * FROM read_parquet('{raw_files}')")
     con.sql(f"CREATE VIEW typed AS {typed_select()}")
