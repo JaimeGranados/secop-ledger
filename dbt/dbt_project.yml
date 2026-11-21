@@ -1,0 +1,18 @@
+# Gold layer. Run from the repo root:
+#   uv run dbt build --project-dir dbt --profiles-dir dbt
+name: secop_ledger
+version: "0.1.0"
+profile: secop_ledger
+require-dbt-version: ">=1.10.0"
+
+model-paths: ["models"]
+test-paths: ["tests"]
+
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  secop_ledger:
+    staging:
+      +materialized: view  # thin layer over the silver Parquet files, no copy
+    marts:
+      +materialized: table
