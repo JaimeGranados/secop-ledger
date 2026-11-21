@@ -7,6 +7,7 @@ from datetime import date
 
 import pyarrow.parquet as pq
 import pytest
+import requests
 
 from secop_ledger.ingest import raw_writer
 from secop_ledger.ingest.collect import CountMismatchError, check_count
@@ -75,6 +76,54 @@ def test_pagination_stops_on_an_empty_page():
     session = FakeSession([make_rows([1, 2]), []])
     pages = list(SocrataClient(session, "test-id").iter_pages(COLUMNS, "x = 1", page_size=2))
     assert [len(p) for p in pages] == [2]
+
+
+# --- Retry when the connection breaks in the middle of a page -----------------------------------
+
+class BrokenBodyResponse(FakeResponse):
+    """Like the 2026-11-13 run: the response starts, then the connection is reset."""
+
+    def json(self):
+        raise requests.exceptions.ChunkedEncodingError("Connection broken: ConnectionResetError")
+
+
+class FlakySession(FakeSession):
+    """Breaks the body of the given call numbers (0 = first call), then answers normally."""
+
+    def __init__(self, pages, broken_calls):
+        super().__init__(pages)
+        self.broken_calls = set(broken_calls)
+
+    def get(self, url, params=None, timeout=None):
+        call = len(self.calls)
+        self.calls.append(params)
+        if call in self.broken_calls:
+            return BrokenBodyResponse(None)
+        return FakeResponse(self.pages.pop(0) if self.pages else [])
+
+
+def test_a_page_broken_in_the_middle_is_asked_again_with_the_same_keyset():
+    session = FlakySession([make_rows([1, 2]), make_rows([3])], broken_calls={1})
+    waits = []
+    client = SocrataClient(session, "test-id", sleep=waits.append)
+
+    pages = list(client.iter_pages(COLUMNS, "x = 1", page_size=2))
+
+    assert [len(p) for p in pages] == [2, 1]  # no row lost, no row repeated
+    assert session.calls[1] == session.calls[2]  # the retry asks for exactly the same page
+    assert waits == [30]
+
+
+def test_it_gives_up_after_the_last_retry():
+    session = FlakySession([], broken_calls=range(10))
+    waits = []
+    client = SocrataClient(session, "test-id", sleep=waits.append)
+
+    with pytest.raises(requests.exceptions.ChunkedEncodingError):
+        list(client.iter_pages(COLUMNS, "x = 1", page_size=2))
+
+    assert len(session.calls) == 5  # 1 try + 4 retries
+    assert waits == [30, 60, 90, 120]
 
 
 # --- Raw writer --------------------------------------------------------------------------------

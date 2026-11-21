@@ -33,10 +33,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-import duckdb
-
 from secop_ledger.config import Settings
-from secop_ledger.silver import rules
+from secop_ledger.silver import db, rules
 from secop_ledger.silver.build import ReconciliationError, silver_dir
 
 log = logging.getLogger("secop_ledger.changes")
@@ -68,7 +66,7 @@ def build_changes(data_dir: Path, day: date) -> dict[str, Any]:
         raise FileNotFoundError(f"no silver snapshot for {day}")
     prev = max((d for d in days if d < day), default=None)
 
-    con = duckdb.connect()
+    con = db.connect(data_dir)  # memory and thread limits, spill folder
     con.sql(f"CREATE VIEW cur AS {_snapshot_sql(data_dir, day)}")
     if prev is None:
         con.sql("CREATE VIEW prev AS SELECT * FROM cur WHERE false")  # same columns, no rows
