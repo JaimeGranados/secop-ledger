@@ -17,8 +17,9 @@ __pycache__/
 venv/
 .pytest_cache/
 
-# dbt
+# dbt (.user.yml = dbt's anonymous usage id, one per machine)
 target/
+.user.yml
 dbt_packages/
 logs/
 
