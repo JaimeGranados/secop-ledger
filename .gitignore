@@ -1,5 +1,7 @@
 # Data: never in Git (big files, and it can contain personal IDs)
 data/
+# Synthetic data built by CI (scripts/make_ci_fixture.py)
+ci-data/
 *.parquet
 *.duckdb
 *.duckdb.wal

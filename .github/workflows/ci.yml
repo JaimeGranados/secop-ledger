@@ -1,0 +1,64 @@
+# CI: lint, unit tests, and the whole pipeline end to end on synthetic data.
+# Real data is never in git (500 MB a day), so the end-to-end job builds a tiny fake history
+# (scripts/make_ci_fixture.py) and runs silver -> changes -> dbt build -> report on it.
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+# A new push to the same branch cancels the run still going for the old commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UV_PYTHON: "3.14"
+  PYTHONUTF8: "1"
+  DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+
+jobs:
+  test:
+    name: Lint, tests and end-to-end pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # --locked: fail if uv.lock does not match pyproject.toml (same versions as on my PC).
+      - name: Install
+        run: uv sync --locked
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Unit tests (pytest)
+        run: uv run pytest -v
+
+      - name: End-to-end on synthetic data (silver, changes, dbt build, report)
+        env:
+          SECOP_DATA_DIR: ci-data
+          SECOP_WAREHOUSE_PATH: ci-data/warehouse.duckdb
+        run: |
+          uv run python scripts/make_ci_fixture.py
+          uv run python -m secop_ledger.silver.build
+          uv run python -m secop_ledger.silver.changes
+          uv run dbt build --project-dir dbt --profiles-dir dbt
+          uv run python -m secop_ledger.report --output ci-data/RESULTS.md
+
+      - name: Keep the report of the synthetic run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-results
+          path: ci-data/RESULTS.md
+          if-no-files-found: ignore

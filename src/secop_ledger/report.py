@@ -104,12 +104,15 @@ def main(argv: list[str] | None = None) -> int:
         default=os.getenv("SECOP_WAREHOUSE_PATH", "data/warehouse.duckdb"),
         help="DuckDB file built by dbt",
     )
+    parser.add_argument(
+        "--output", type=Path, default=RESULTS_FILE, help="where to write (CI writes elsewhere)"
+    )
     args = parser.parse_args(argv)
 
     con = duckdb.connect(args.warehouse, read_only=True)  # the report never writes to gold
     report = build_report(con, ANALYSIS_DIR)
-    RESULTS_FILE.write_text(report, encoding="utf-8")
-    print(f"wrote {RESULTS_FILE}")
+    args.output.write_text(report, encoding="utf-8")
+    print(f"wrote {args.output}")
     return 0
 
 
