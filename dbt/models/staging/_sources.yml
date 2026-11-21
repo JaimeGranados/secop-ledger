@@ -1,8 +1,12 @@
 version: 2
 
 # The silver layer is Parquet on disk (written by src/secop_ledger/silver). dbt-duckdb reads it in
-# place with `external_location`: no load step, no copy. `filename = true` lets staging skip the
-# `ingest_date=X.tmp` folders a crashed run can leave behind.
+# place with `external_location`: no load step, no copy.
+#
+# The glob `ingest_date=*[0-9]/` only matches finished days (they end in a digit), so the
+# `ingest_date=X.tmp` folders a crashed run leaves behind are never opened. Filtering on `filename`
+# is not enough: DuckDB opens every matched file first, and a half-written one breaks the query
+# (raw had a 4-byte `ingest_date=2026-11-16.tmp/part-00000.parquet`).
 sources:
   - name: silver
     description: Typed, deduplicated daily snapshots and the change events between them.
@@ -13,11 +17,43 @@ sources:
           or disappeared. Day 1 = baseline for every contract.
         meta:
           external_location: >-
-            read_parquet('{{ env_var('SECOP_DATA_DIR', 'data') }}/silver/contract_changes/*/*.parquet',
+            read_parquet('{{ env_var('SECOP_DATA_DIR', 'data') }}/silver/contract_changes/ingest_date=*[0-9]/*.parquet',
             filename = true)
       - name: contracts_snapshot
         description: One row per contract per collected day (all columns, typed).
         meta:
           external_location: >-
-            read_parquet('{{ env_var('SECOP_DATA_DIR', 'data') }}/silver/contracts_snapshot/*/*.parquet',
+            read_parquet('{{ env_var('SECOP_DATA_DIR', 'data') }}/silver/contracts_snapshot/ingest_date=*[0-9]/*.parquet',
+            filename = true)
+      - name: contracts_quarantine
+        description: Raw rows that could not be used, with the reason (one file per day, often empty).
+        meta:
+          external_location: >-
+            read_parquet('{{ env_var('SECOP_DATA_DIR', 'data') }}/silver/contracts_quarantine/ingest_date=*[0-9]/*.parquet',
+            filename = true)
+      - name: snapshot_manifests
+        description: >
+          The _manifest.json the silver build writes per day: raw rows, snapshot rows, quarantine,
+          duplicate copies removed, flag counts.
+        meta:
+          external_location: >-
+            read_json_auto('{{ env_var('SECOP_DATA_DIR', 'data') }}/silver/contracts_snapshot/ingest_date=*[0-9]/_manifest.json',
+            filename = true)
+
+  - name: raw
+    description: Metadata of the daily collector runs.
+    tables:
+      - name: contracts
+        description: The raw daily snapshots (only counted here, from the Parquet metadata).
+        meta:
+          external_location: >-
+            read_parquet('{{ env_var('SECOP_DATA_DIR', 'data') }}/raw/contracts/ingest_date=*[0-9]/*.parquet',
+            filename = true)
+      - name: collector_manifests
+        description: >
+          The _manifest.json the collector writes per published day: rows written, the source
+          count(*) at the start, run time. A day that failed has no manifest.
+        meta:
+          external_location: >-
+            read_json_auto('{{ env_var('SECOP_DATA_DIR', 'data') }}/raw/contracts/ingest_date=*[0-9]/_manifest.json',
             filename = true)

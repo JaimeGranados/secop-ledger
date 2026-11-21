@@ -14,6 +14,16 @@ vars:
   # dim_date range: covers signing dates (slice starts 2025-01-01) and the days we collect.
   date_start: "2025-01-01"
   date_end: "2030-12-31"
+  # The 7 tracked columns (same list as src/secop_ledger/silver/rules.py TRACKED_COLUMNS) and the
+  # unit of their change. fct_contract_changes generates its SQL from this list.
+  tracked_columns:
+    estado_contrato: status
+    valor_del_contrato: COP
+    valor_facturado: COP
+    valor_pagado: COP
+    valor_pendiente_de_pago: COP
+    dias_adicionados: days
+    fecha_de_fin_del_contrato: date
 
 models:
   secop_ledger:
