@@ -11,6 +11,9 @@ $log = Join-Path $logDir ("collect-{0}.log" -f (Get-Date -Format "yyyy-MM-dd"))
 cmd /c "uv run python -m secop_ledger.ingest.collect >> `"$log`" 2>&1"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# Silver only runs if the collector worked. It builds every raw day that has no silver yet.
+# Each step only runs if the previous one worked. Each builds every day that is still missing.
 cmd /c "uv run python -m secop_ledger.silver.build >> `"$log`" 2>&1"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+cmd /c "uv run python -m secop_ledger.silver.changes >> `"$log`" 2>&1"
 exit $LASTEXITCODE

@@ -3,6 +3,7 @@ data/
 *.parquet
 *.duckdb
 *.duckdb.wal
+.tmp/
 
 # Secrets (API token, HMAC key)
 .env
