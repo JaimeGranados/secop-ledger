@@ -9,6 +9,7 @@ dependencies = [
     "pyarrow>=18.0",
     "python-dotenv>=1.0",
     "duckdb>=2.0.0",
+    "dbt-duckdb>=1.11.1",
 ]
 
 [dependency-groups]

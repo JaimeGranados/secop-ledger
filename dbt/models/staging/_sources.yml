@@ -1,0 +1,23 @@
+version: 2
+
+# The silver layer is Parquet on disk (written by src/secop_ledger/silver). dbt-duckdb reads it in
+# place with `external_location`: no load step, no copy. `filename = true` lets staging skip the
+# `ingest_date=X.tmp` folders a crashed run can leave behind.
+sources:
+  - name: silver
+    description: Typed, deduplicated daily snapshots and the change events between them.
+    tables:
+      - name: contract_changes
+        description: >
+          One row per contract per day it appeared (baseline / new), changed on a tracked column,
+          or disappeared. Day 1 = baseline for every contract.
+        meta:
+          external_location: >-
+            read_parquet('{{ env_var('SECOP_DATA_DIR', 'data') }}/silver/contract_changes/*/*.parquet',
+            filename = true)
+      - name: contracts_snapshot
+        description: One row per contract per collected day (all columns, typed).
+        meta:
+          external_location: >-
+            read_parquet('{{ env_var('SECOP_DATA_DIR', 'data') }}/silver/contracts_snapshot/*/*.parquet',
+            filename = true)

@@ -1,0 +1,49 @@
+version: 2
+
+models:
+  - name: contract_history
+    description: >
+      SCD Type 2 history of every contract: one row per version of the 7 tracked columns.
+      `valid_from` is the day the version was first seen; `valid_to` is exclusive (null = current).
+      History starts on 2026-11-10 (first run): `opened_by = baseline` means "first seen", not the
+      real start of the contract.
+    columns:
+      - name: version_key
+        description: id_contrato@valid_from. One version per contract per day.
+        data_tests:
+          - unique
+          - not_null
+      - name: id_contrato
+        data_tests:
+          - not_null
+      - name: valid_from
+        data_tests:
+          - not_null
+      - name: opened_by
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["baseline", "new", "changed"]
+      - name: gap_days
+        description: >
+          Missing days before this version was seen (changed versions only). 0 = we know the day.
+
+unit_tests:
+  - name: test_versions_open_on_each_change_and_close_on_the_next_event
+    description: >
+      Contract A: baseline, a change seen after a 2-day gap, then it disappears.
+      Contract B: only the baseline, so its only version is current.
+    model: contract_history
+    given:
+      - input: ref('stg_contract_changes')
+        rows:
+          - {id_contrato: A, change_type: baseline, ingest_date: 2026-11-10, estado_contrato: En ejecucion}
+          - {id_contrato: A, change_type: changed, ingest_date: 2026-11-15, prev_ingest_date: 2026-11-12, gap_days: 2, estado_contrato: Terminado}
+          - {id_contrato: A, change_type: disappeared, ingest_date: 2026-11-18}
+          - {id_contrato: B, change_type: baseline, ingest_date: 2026-11-10, estado_contrato: En ejecucion}
+    expect:
+      # every expected row needs the same columns (dbt builds them with UNION ALL)
+      rows:
+        - {version_key: A@2026-11-10, version_number: 1, valid_from: 2026-11-10, valid_to: 2026-11-15, is_current: false, gap_days: null, estado_contrato: En ejecucion}
+        - {version_key: A@2026-11-15, version_number: 2, valid_from: 2026-11-15, valid_to: 2026-11-18, is_current: false, gap_days: 2, estado_contrato: Terminado}
+        - {version_key: B@2026-11-10, version_number: 1, valid_from: 2026-11-10, valid_to: null, is_current: true, gap_days: null, estado_contrato: En ejecucion}

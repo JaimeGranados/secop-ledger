@@ -1,4 +1,4 @@
-# Daily pipeline, for Windows Task Scheduler: collect raw, then build silver.
+# Daily pipeline, for Windows Task Scheduler: collect raw -> silver -> changes -> dbt gold.
 # Runs from the repo root and appends to one log file per day in data/logs/.
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
@@ -16,4 +16,8 @@ cmd /c "uv run python -m secop_ledger.silver.build >> `"$log`" 2>&1"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 cmd /c "uv run python -m secop_ledger.silver.changes >> `"$log`" 2>&1"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Gold: rebuild the dbt models and run every dbt test (a failed test fails the task).
+cmd /c "uv run dbt build --project-dir dbt --profiles-dir dbt >> `"$log`" 2>&1"
 exit $LASTEXITCODE
