@@ -82,7 +82,8 @@ select
 
     -- Silver
     s.snapshot_rows,
-    coalesce(q.quarantine_rows, 0) as quarantine_rows,
+    -- An empty quarantine file has no rows to count: 0 on a built day, unknown (null) on a missed day.
+    case when s.snapshot_rows is not null then coalesce(q.quarantine_rows, 0) end as quarantine_rows,
     sr.duplicate_copies_removed,
     r.raw_rows = s.snapshot_rows + coalesce(q.quarantine_rows, 0) + sr.duplicate_copies_removed
         as silver_reconciled,
