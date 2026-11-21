@@ -16,6 +16,10 @@ models:
       - name: id_contrato
         data_tests:
           - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_contract')
+                field: id_contrato
       - name: valid_from
         data_tests:
           - not_null
@@ -27,6 +31,73 @@ models:
       - name: gap_days
         description: >
           Missing days before this version was seen (changed versions only). 0 = we know the day.
+
+  - name: dim_contract
+    description: >
+      One row per contract: what it is and who signed it (SCD Type 1, values from the last
+      snapshot where it was seen). Joins contract_history to the entity, supplier and date dims.
+    columns:
+      - name: id_contrato
+        data_tests:
+          - unique
+          - not_null
+      - name: entity_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_entity')
+                field: entity_key
+      - name: supplier_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_supplier')
+                field: supplier_key
+      - name: signed_date_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: is_active
+        description: true = present in the newest snapshot.
+
+  - name: dim_entity
+    description: One row per public entity (SCD Type 1, values from its most recently signed contract).
+    columns:
+      - name: entity_key
+        description: codigo_entidad (SECOP's code for the entity).
+        data_tests:
+          - unique
+          - not_null
+
+  - name: dim_supplier
+    description: >
+      One row per supplier (SCD Type 1). supplier_name is filled only for companies (NIT):
+      people's names are personal data and never reach gold.
+    columns:
+      - name: supplier_key
+        description: codigo_proveedor (SECOP's code, not a personal ID).
+        data_tests:
+          - unique
+          - not_null
+      - name: supplier_kind
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["company", "person", "unknown"]
+
+  - name: dim_date
+    description: One row per calendar day, from var date_start to var date_end.
+    columns:
+      - name: date_key
+        description: yyyymmdd as an integer.
+        data_tests:
+          - unique
+          - not_null
 
 unit_tests:
   - name: test_versions_open_on_each_change_and_close_on_the_next_event
