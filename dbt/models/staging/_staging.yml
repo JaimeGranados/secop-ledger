@@ -15,3 +15,19 @@ models:
           - accepted_values:
               arguments:
                 values: ["baseline", "new", "changed", "disappeared"]
+
+  - name: stg_collector_runs
+    description: One row per day the collector published, from its _manifest.json.
+    columns:
+      - name: ingest_date
+        data_tests:
+          - unique
+          - not_null
+
+  - name: stg_silver_runs
+    description: One row per day the silver build published, from its _manifest.json.
+    columns:
+      - name: ingest_date
+        data_tests:
+          - unique
+          - not_null

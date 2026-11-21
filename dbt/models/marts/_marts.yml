@@ -99,6 +99,66 @@ models:
           - unique
           - not_null
 
+  - name: fct_contract_changes
+    description: >
+      One row per changed value: contract × day × tracked column, with the old and new value and
+      how much it moved (delta). changed_on = the day we saw it; see gap_days.
+    columns:
+      - name: change_key
+        description: id_contrato@changed_on@column_name.
+        data_tests:
+          - unique
+          - not_null
+      - name: id_contrato
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_contract')
+                field: id_contrato
+      - name: changed_on_date_key
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: column_name
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["estado_contrato", "valor_del_contrato", "valor_facturado", "valor_pagado",
+                         "valor_pendiente_de_pago", "dias_adicionados", "fecha_de_fin_del_contrato"]
+      - name: value_unit
+        data_tests:
+          - not_null
+      - name: delta
+        description: new - old, in COP (money) or days (added days, end date). Null for status.
+
+  - name: fct_daily_quality
+    description: >
+      One row per calendar day from the first to the last collected day, also missed days
+      (collected = false). Source size, raw/silver reconciliation, quarantine, duplicates,
+      quality flags, new/changed/disappeared contracts and changes the source did not date.
+    columns:
+      - name: ingest_date
+        data_tests:
+          - unique
+          - not_null
+      - name: date_key
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: collected
+        description: false = the pipeline did not publish this day (PC off, run killed, network).
+      - name: missed_days_before
+        description: Days not collected just before this collected day.
+      - name: pct_changes_not_dated_by_source
+        description: >
+          % of changed contracts whose ultima_actualizacion did not move: changes an incremental
+          pull on that column would miss.
+
 unit_tests:
   - name: test_versions_open_on_each_change_and_close_on_the_next_event
     description: >

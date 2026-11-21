@@ -23,5 +23,8 @@ select
     "after".valor_pendiente_de_pago,
     "after".dias_adicionados,
     "after".fecha_de_fin_del_contrato,
+    -- Both versions as structs too, for fct_contract_changes (old value → new value).
+    "before" as before_values,
+    "after" as after_values,
     row_hash
 from source
