@@ -1,5 +1,7 @@
 # SECOP Ledger
 
+**English** · [Español](README.es.md)
+
 [![CI](https://github.com/JaimeGranados/secop-ledger/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/JaimeGranados/secop-ledger/actions/workflows/ci.yml)
 
 Colombian public contracts change after they are signed: their status, payments, end date and
