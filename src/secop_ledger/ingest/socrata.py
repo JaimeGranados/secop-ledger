@@ -83,6 +83,16 @@ class SocrataClient:
         meta = self._get(f"/api/views/{self.dataset_id}.json")
         return {col["fieldName"] for col in meta["columns"]}
 
+    def rows_updated_at(self) -> int:
+        """When the source last reloaded its rows (Unix seconds, from the dataset metadata).
+
+        The source reloads the whole dataset about once a day, and every reload gives every row a
+        NEW `:id` (2026-11-24 and 11-26 share 0 of about 2M ids). So the keyset read is only
+        consistent if this value is the same at the start and at the end of the download.
+        """
+        meta = self._get(f"/api/views/{self.dataset_id}.json")
+        return int(meta["rowsUpdatedAt"])
+
     def count(self, where: str) -> int:
         rows = self._get(
             f"/resource/{self.dataset_id}.json",
@@ -97,7 +107,9 @@ class SocrataClient:
 
         Why not `$offset`: if rows are added while we read, offset pages shift and we skip or
         repeat rows. Why not `id_contrato`: it is not unique in the source (repeated rows).
-        `:id` is unique, so `:id > last_id` never skips or repeats a row.
+        `:id` is unique, so `:id > last_id` never skips or repeats a row, as long as the source
+        does not reload in the middle of the read (a reload gives new ids; the collector checks
+        `rows_updated_at()` before and after).
         """
         last_id: str | None = None
         page_number = 0
