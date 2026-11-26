@@ -1,11 +1,22 @@
 # Daily pipeline, for Windows Task Scheduler: collect raw -> silver -> changes -> dbt gold -> checks.
 # Runs from the repo root and appends to one log file per day in data/logs/.
 # A failed step sends an alert (ntfy: phone push + email) and stops the run with that step's code.
+# Heartbeat (healthchecks.io): 'start' at the beginning, 'exit <code>' at the end. If the end ping
+# never arrives (PC off, run hung), healthchecks.io alerts from outside the PC.
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
 $logDir = "data/logs"
 New-Item -ItemType Directory -Force $logDir | Out-Null
 $log = Join-Path $logDir ("collect-{0}.log" -f (Get-Date -Format "yyyy-MM-dd"))
+
+function Send-Heartbeat($kind, $code) {
+    cmd /c "uv run python -m secop_ledger.monitor.heartbeat $kind $code --log `"$log`" >> `"$log`" 2>&1"
+}
+
+function Stop-Run($code) {
+    Send-Heartbeat "exit" $code
+    exit $code
+}
 
 function Invoke-Step($name, $command) {
     # cmd /c does the redirection: Windows PowerShell 5.1 turns stderr lines of a program into
@@ -14,9 +25,11 @@ function Invoke-Step($name, $command) {
     $code = $LASTEXITCODE
     if ($code -ne 0) {
         cmd /c "uv run python -m secop_ledger.monitor.notify --step $name --exit-code $code --log `"$log`" >> `"$log`" 2>&1"
-        exit $code
+        Stop-Run $code
     }
 }
+
+cmd /c "uv run python -m secop_ledger.monitor.heartbeat start >> `"$log`" 2>&1"
 
 # Each step only runs if the previous one worked. Each builds every day that is still missing.
 Invoke-Step "collect" "uv run python -m secop_ledger.ingest.collect"
@@ -27,4 +40,4 @@ Invoke-Step "dbt" "uv run dbt build --project-dir dbt --profiles-dir dbt"
 
 # Data checks: they send their own notification (silent if all OK). Exit code 5 = a FAIL check.
 cmd /c "uv run python -m secop_ledger.monitor.checks >> `"$log`" 2>&1"
-exit $LASTEXITCODE
+Stop-Run $LASTEXITCODE

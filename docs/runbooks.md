@@ -80,3 +80,17 @@ The slice only grows, so this is suspicious. The data is already published.
 1. Look at the timestamps between pages in the log. A gap of hours = the PC slept or the network
    dropped; many slow pages = the API was slow.
 2. Nothing to repair if the checks are OK otherwise. If it repeats, consider a Socrata app token.
+
+## heartbeat-down
+
+**Alert:** from healthchecks.io (email or ntfy): the check "SECOP Ledger daily" is **down**.
+No success ping arrived by the deadline (07:00 Bogotá + 8 h grace), or the run reported a
+non-zero exit code. This is the only alert that works when the PC is off.
+
+1. Is the PC on? If it was off all day, the day is lost (see [missed-day](#missed-day)).
+2. The PC is on but no ping: is the task enabled and did it start?
+   `Get-ScheduledTaskInfo "SECOP Ledger collector"` (`LastRunTime`, `LastTaskResult`).
+3. A `start` ping but no end ping: the run hung or was killed. Read the day's log: the last line
+   shows the step. Run it again: `powershell -File scripts/run_collector.ps1`.
+4. An end ping with a non-zero code: the ntfy alert for that step came first; follow its runbook.
+   healthchecks.io shows the last 30 log lines in the ping's body.
