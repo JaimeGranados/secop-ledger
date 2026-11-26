@@ -9,9 +9,16 @@ import pyarrow.parquet as pq
 import pytest
 import requests
 
+from secop_ledger.config import Settings
 from secop_ledger.ingest import raw_writer
-from secop_ledger.ingest.collect import CountMismatchError, check_count
+from secop_ledger.ingest.collect import (
+    CountMismatchError,
+    SourceRefreshedError,
+    check_count,
+    collect,
+)
 from secop_ledger.ingest.columns import PII_COLUMNS, SELECTED_COLUMNS
+from secop_ledger.ingest.keep_awake import ES_CONTINUOUS, ES_SYSTEM_REQUIRED, keep_awake
 from secop_ledger.ingest.socrata import SocrataClient
 
 COLUMNS = ("id_contrato", "valor_pagado", "urlproceso")
@@ -195,3 +202,88 @@ def test_count_outside_tolerance_fails():
 def test_zero_rows_from_the_source_fails():
     with pytest.raises(CountMismatchError):
         check_count(expected=0, written=0)
+
+
+# --- The source reloads in the middle of the download (2026-11-25) ------------------------------
+
+def test_rows_updated_at_is_read_from_the_dataset_metadata():
+    session = FakeSession([{"rowsUpdatedAt": 1795687978, "columns": []}])
+    assert SocrataClient(session, "test-id").rows_updated_at() == 1795687978
+
+
+class FakeClient:
+    """A source that can reload between calls. `versions` = rowsUpdatedAt answers, in order."""
+
+    def __init__(self, versions, rows_per_try):
+        self.versions = list(versions)
+        self.rows_per_try = list(rows_per_try)
+        self.downloads = 0
+
+    def column_names(self):
+        return set(SELECTED_COLUMNS)
+
+    def rows_updated_at(self):
+        return self.versions.pop(0)
+
+    def count(self, where):
+        return len(self.rows_per_try[min(self.downloads, len(self.rows_per_try) - 1)])
+
+    def iter_pages(self, columns, where, page_size):
+        rows = self.rows_per_try[self.downloads]
+        self.downloads += 1
+        yield rows
+
+
+def _settings(tmp_path):
+    return Settings(data_dir=tmp_path, slice_start=date(2025, 1, 1), page_size=25_000,
+                    app_token=None)
+
+
+def test_a_reload_during_the_download_starts_again_and_publishes_the_second_read(tmp_path):
+    # Try 1: version 100 at the start, 200 at the end (reloaded) -> thrown away.
+    # Try 2: version 200 at the start and at the end -> published.
+    old_ids, new_ids = make_rows([1, 2, 3]), make_rows([7, 8, 9, 10])
+    client = FakeClient(versions=[100, 200, 200, 200], rows_per_try=[old_ids, new_ids])
+
+    assert collect(_settings(tmp_path), DAY, client=client) == 0
+
+    final_dir = raw_writer.partition_dir(tmp_path, DAY)
+    table = pq.read_table(final_dir / "part-00000.parquet")
+    assert table.column("socrata_id").to_pylist() == ["row-7", "row-8", "row-9", "row-10"]
+    manifest = json.loads((final_dir / "_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["attempts"] == 2
+    assert manifest["source_rows_updated_at"] == 200
+    assert manifest["rows"] == manifest["source_count"] == 4
+
+
+def test_reloads_on_every_try_publish_nothing(tmp_path):
+    client = FakeClient(
+        versions=[100, 200, 200, 300], rows_per_try=[make_rows([1]), make_rows([2])]
+    )
+
+    with pytest.raises(SourceRefreshedError):
+        collect(_settings(tmp_path), DAY, client=client)
+
+    assert client.downloads == 2
+    assert not raw_writer.partition_dir(tmp_path, DAY).exists()
+    assert not raw_writer.staging_dir(tmp_path, DAY).exists()
+
+
+def test_a_count_mismatch_without_a_reload_still_fails_and_is_not_retried(tmp_path):
+    class LyingCount(FakeClient):
+        def count(self, where):
+            return 1_000
+
+    client = LyingCount(versions=[100, 100], rows_per_try=[make_rows([1, 2])])
+
+    with pytest.raises(CountMismatchError):
+        collect(_settings(tmp_path), DAY, client=client)
+    assert client.downloads == 1
+
+
+def test_keep_awake_blocks_sleep_and_always_gives_it_back():
+    calls = []
+    with pytest.raises(RuntimeError), keep_awake(set_state=lambda flags: calls.append(flags) or 1):
+        raise RuntimeError("the download failed")
+
+    assert calls == [ES_CONTINUOUS | ES_SYSTEM_REQUIRED, ES_CONTINUOUS]
