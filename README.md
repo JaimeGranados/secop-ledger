@@ -109,8 +109,47 @@ uv run dbt build --project-dir dbt --profiles-dir dbt   # gold + 58 tests
 uv run python -m secop_ledger.report               # analysis/RESULTS.md
 ```
 
-`scripts/run_collector.ps1` runs the four pipeline steps in order (each only if the previous one
-worked) and is scheduled daily with Windows Task Scheduler.
+`scripts/run_collector.ps1` runs the steps in order (each only if the previous one worked), then the
+data checks, and is scheduled daily with Windows Task Scheduler.
+
+### Monitoring
+
+Three layers, each for a different way to fail ([`docs/runbooks.md`](docs/runbooks.md) says what to
+do for each alert):
+
+| Layer | Catches | How |
+|---|---|---|
+| Step alert | a step exits with an error | phone push + email ([ntfy](https://ntfy.sh)) with the last log lines |
+| Data checks | a green run with bad data: missed day, source not refreshed, row drop > 1 %, slow run | `secop_ledger.monitor.checks` after dbt; silent when all is OK |
+| Heartbeat | the run never happened or hung (PC off) | [healthchecks.io](https://healthchecks.io) alerts when the ping does **not** arrive |
+
+Alerts never fail the pipeline, and the push is sent even if the email is refused.
+
+### Run with Airflow (optional)
+
+The same pipeline as an Airflow 3.4 DAG (`airflow/dags/secop_daily.py`), in Docker Compose:
+
+```powershell
+docker compose -f airflow/docker-compose.yaml up -d --build   # UI: http://localhost:8080
+```
+
+```
+heartbeat_start -> collect -> silver -> changes -> dbt_build -> checks -> heartbeat_ok
+```
+
+- **Thin DAG:** each task calls the same command as the script. The logic and its tests stay in the
+  package. The pipeline has its own virtual environment in the image (from `uv.lock`), apart from
+  Airflow's, so their dependencies never clash.
+- **Slim setup for a small PC:** LocalExecutor + Postgres, no Celery or Redis. About 800 MB of RAM.
+- **Retries are safe because every step is idempotent.** `execution_timeout` turns a hang into a
+  failure. The alert callback runs only after the last retry.
+- **`catchup=False`, and the collector ignores the logical date:** the source keeps no history, so a
+  run for an old date would download today's data. Missed days are alerts, not backfills.
+
+**Why production still uses Task Scheduler:** for one daily job on one home PC, Airflow adds 4
+containers and needs Docker Desktop open (it starts only after someone signs in). Measured on the
+same data: `dbt build` takes **93 s in Docker vs. 59–70 s on Windows** (+40 %, reading `E:` through
+WSL). Airflow becomes the right tool with more pipelines and an always-on machine.
 
 ## Project layout
 
@@ -118,10 +157,12 @@ worked) and is scheduled daily with Windows Task Scheduler.
 src/secop_ledger/
   ingest/     Socrata client, collector, raw writer (staging -> publish)
   silver/     typing and cleaning rules, change detection
+  monitor/    data checks, notifications (ntfy), heartbeat (healthchecks.io)
   report.py   runs analysis/*.sql and writes RESULTS.md
 dbt/          gold layer: staging, intermediate, marts, tests
+airflow/      Airflow DAG, Dockerfile and Docker Compose (optional)
 analysis/     the 5 business questions (SQL) and RESULTS.md
-docs/         data model: questions, grain, decisions with numbers, personal data
+docs/         data model (questions, grain, decisions with numbers), runbooks
 scripts/      daily run, data profile, CI fixture
 tests/        pytest
 ```
@@ -146,6 +187,12 @@ tests/        pytest
 - DuckDB **copied a CTE used twice** and spilled to disk: 480 s → 31 s with one window function (`QUALIFY`).
 - A 4-byte file left in a `.tmp` folder broke every query that globbed `*/`: the sources now only
   match finished days (`ingest_date=*[0-9]/`).
+- The PC **slept in the middle of a download**, and meanwhile the source reloaded the dataset. Every
+  reload gives every row a **new `:id`**, so the keyset read went on in a new id space and read about
+  750,000 rows twice. The count check caught it (the day was lost, not corrupted). Now the collector
+  compares the source version (`rowsUpdatedAt`) before and after and reads again if it changed, and it
+  keeps the PC awake while it downloads.
+- In Airflow, a manual run with a logical date before `start_date` is green but **runs no task**.
 
 ## Roadmap
 
@@ -154,7 +201,7 @@ tests/        pytest
 - [x] Change detection and SCD Type 2 history (dbt)
 - [x] Star schema, daily quality, the 5 business questions
 - [x] CI with an end-to-end run on synthetic data
-- [ ] Alerts when a run fails or a check finds something wrong
+- [x] Alerts when a run fails or a check finds something wrong, plus a heartbeat
 - [ ] Cloud runner (GitHub Actions + object storage) so no day is missed
-- [ ] Airflow DAG with retries and backfill, Docker Compose
+- [x] Airflow DAG with retries and timeouts, Docker Compose (optional; production on Task Scheduler)
 - [ ] Narrow daily snapshot and a retention policy for raw

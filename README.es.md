@@ -118,8 +118,51 @@ uv run dbt build --project-dir dbt --profiles-dir dbt   # gold + 58 tests
 uv run python -m secop_ledger.report               # analysis/RESULTS.md
 ```
 
-`scripts/run_collector.ps1` corre los cuatro pasos en orden (cada uno solo si el anterior funcionó) y
-está programado todos los días con el Programador de tareas de Windows.
+`scripts/run_collector.ps1` corre los pasos en orden (cada uno solo si el anterior funcionó), después
+los chequeos de datos, y está programado todos los días con el Programador de tareas de Windows.
+
+### Monitoreo
+
+Tres capas, cada una para una forma distinta de fallar ([`docs/runbooks.md`](docs/runbooks.md) dice
+qué hacer con cada alerta; está en inglés):
+
+| Capa | Detecta | Cómo |
+|---|---|---|
+| Alerta de paso | un paso termina con error | notificación al celular + correo ([ntfy](https://ntfy.sh)) con las últimas líneas del log |
+| Chequeos de datos | una ejecución verde con datos malos: día perdido, fuente sin actualizar, caída de filas > 1 %, ejecución lenta | `secop_ledger.monitor.checks` después de dbt; silencioso si todo está bien |
+| Heartbeat | la ejecución nunca ocurrió o se colgó (PC apagado) | [healthchecks.io](https://healthchecks.io) avisa cuando la señal **no** llega |
+
+Las alertas nunca hacen fallar el pipeline, y la notificación al celular sale aunque el correo sea
+rechazado.
+
+### Correrlo con Airflow (opcional)
+
+El mismo pipeline como un DAG de Airflow 3.4 (`airflow/dags/secop_daily.py`), con Docker Compose:
+
+```powershell
+docker compose -f airflow/docker-compose.yaml up -d --build   # UI: http://localhost:8080
+```
+
+```
+heartbeat_start -> collect -> silver -> changes -> dbt_build -> checks -> heartbeat_ok
+```
+
+- **DAG delgado:** cada tarea llama el mismo comando que el script. La lógica y sus tests se quedan en
+  el paquete. El pipeline tiene su propio entorno virtual en la imagen (desde `uv.lock`), aparte del de
+  Airflow, para que sus dependencias nunca choquen.
+- **Configuración liviana para un PC pequeño:** LocalExecutor + Postgres, sin Celery ni Redis. Unos
+  800 MB de RAM.
+- **Los reintentos son seguros porque cada paso es idempotente.** `execution_timeout` convierte un
+  cuelgue en un fallo. La alerta se envía solo después del último reintento.
+- **`catchup=False`, y el recolector ignora la fecha lógica:** la fuente no guarda historia, así que
+  una ejecución para una fecha vieja descargaría los datos de hoy. Los días perdidos son alertas, no
+  backfills.
+
+**Por qué producción sigue en el Programador de tareas:** para un solo trabajo diario en un PC de casa,
+Airflow agrega 4 contenedores y necesita Docker Desktop abierto (solo arranca cuando alguien inicia
+sesión). Medido con los mismos datos: `dbt build` tarda **93 s en Docker contra 59–70 s en Windows**
+(+40 %, por leer `E:` a través de WSL). Airflow es la herramienta correcta cuando hay más pipelines y
+una máquina siempre encendida.
 
 ## Estructura del proyecto
 
@@ -127,10 +170,12 @@ está programado todos los días con el Programador de tareas de Windows.
 src/secop_ledger/
   ingest/     cliente Socrata, recolector, escritor de raw (staging -> publicar)
   silver/     reglas de tipos y limpieza, detección de cambios
+  monitor/    chequeos de datos, notificaciones (ntfy), heartbeat (healthchecks.io)
   report.py   corre analysis/*.sql y escribe RESULTS.md
 dbt/          capa gold: staging, intermediate, marts, tests
+airflow/      DAG de Airflow, Dockerfile y Docker Compose (opcional)
 analysis/     las 5 preguntas de negocio (SQL) y RESULTS.md
-docs/         modelo de datos: preguntas, grano, decisiones con números, datos personales
+docs/         modelo de datos (preguntas, grano, decisiones con números), runbooks
 scripts/      ejecución diaria, perfil de datos, fixture de CI
 tests/        pytest
 ```
@@ -159,6 +204,13 @@ tests/        pytest
   función de ventana (`QUALIFY`).
 - Un archivo de 4 bytes que quedó en una carpeta `.tmp` rompía toda consulta que usaba el glob `*/`:
   ahora las fuentes solo leen días terminados (`ingest_date=*[0-9]/`).
+- El PC **entró en suspensión a mitad de una descarga**, y mientras tanto la fuente recargó el dataset.
+  Cada recarga le da a cada fila un **`:id` nuevo**, así que la lectura por keyset siguió en otro espacio
+  de ids y leyó unas 750,000 filas dos veces. El chequeo de conteo lo detectó (el día se perdió, no se
+  dañó). Ahora el recolector compara la versión de la fuente (`rowsUpdatedAt`) antes y después y vuelve
+  a leer si cambió, y mantiene el PC despierto mientras descarga.
+- En Airflow, una ejecución manual con fecha lógica anterior a `start_date` sale verde pero **no corre
+  ninguna tarea**.
 
 ## Hoja de ruta
 
@@ -167,7 +219,7 @@ tests/        pytest
 - [x] Detección de cambios e historia SCD Type 2 (dbt)
 - [x] Modelo estrella, calidad diaria, las 5 preguntas de negocio
 - [x] CI con una ejecución de punta a punta con datos sintéticos
-- [ ] Alertas cuando una ejecución falla o un chequeo encuentra algo mal
+- [x] Alertas cuando una ejecución falla o un chequeo encuentra algo mal, más un heartbeat
 - [ ] Ejecución en la nube (GitHub Actions + almacenamiento de objetos) para no perder días
-- [ ] DAG de Airflow con reintentos y backfill, Docker Compose
+- [x] DAG de Airflow con reintentos y timeouts, Docker Compose (opcional; producción en el Programador de tareas)
 - [ ] Snapshot diario reducido y política de retención para raw
