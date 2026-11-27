@@ -1,0 +1,12 @@
+# The build context is the repo root. Keep it small: data/ alone is > 10 GB.
+data/
+ci-data/
+.venv/
+.git/
+.tmp/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+dbt/target/
+dbt/logs/
+.env
