@@ -1,38 +1,59 @@
--- One row per contract: its descriptive columns from the LAST snapshot where we saw it
--- (SCD Type 1 = only current values), plus the first and last day we saw it.
--- Reads every snapshot, so a contract that disappeared keeps the values it had on its last day.
+-- One row per contract: its descriptive columns as they are NOW (SCD Type 1 = only current
+-- values), plus the first and last day we saw it.
 --
--- Performance (measured on 6 snapshots = 11.9M rows, 2 GB / 2 threads):
---   arg_max of a struct with all the columns ........ 545 s (spilled to disk)
---   aggregate keys + join back (CTE used twice) ..... 480 s (DuckDB materialized the CTE = a copy
---                                                       of every row with its texts)
---   one window pass with QUALIFY (this) ............. a few seconds: the files are read once.
+-- Reads the attributes DELTA, not the daily snapshots: a full row is stored only on the days a
+-- contract is new or changed, so the newest row per contract = its current values (the test
+-- assert_attributes_match_latest_snapshot proves it with full_hash). This table no longer grows
+-- with every collected day: about 2M rows on day 1 + ~5% per day, instead of 2M per day.
+-- (Before: all snapshots, 214 s for dbt build on 11 days and growing.)
+--
+-- A contract that disappeared keeps the values of its last attribute row.
+-- One window pass with QUALIFY (a CTE used twice was copied by DuckDB: 480 s).
+with attributes as (
+    select
+        *,
+        min(ingest_date) over (partition by id_contrato) as first_seen_date
+    from {{ source('silver', 'contracts_attributes') }}
+    where filename not like '%.tmp%'
+    qualify ingest_date = max(ingest_date) over (partition by id_contrato)
+),
+
+-- The last day we saw it: the newest collected day, unless its newest event is "disappeared"
+-- (then the day before it disappeared = the previous snapshot of that event).
+last_events as (
+    select id_contrato, change_type, prev_ingest_date
+    from {{ ref('stg_contract_changes') }}
+    qualify ingest_date = max(ingest_date) over (partition by id_contrato)
+)
+
 select
-    id_contrato,
-    min(ingest_date) over (partition by id_contrato) as first_seen_date,
-    ingest_date as last_seen_date,
-    referencia_del_contrato,
-    proceso_de_compra,
-    urlproceso,
-    tipo_de_contrato,
-    modalidad_de_contratacion,
-    origen_de_los_recursos,
-    fecha_de_firma,
-    fecha_de_inicio_del_contrato,
-    codigo_entidad,
-    nit_entidad,
-    nombre_entidad,
-    departamento,
-    ciudad,
-    orden,
-    sector,
-    rama,
-    entidad_centralizada,
-    codigo_proveedor,
-    tipodocproveedor,
-    proveedor_adjudicado,
-    es_pyme,
-    es_grupo
-from {{ source('silver', 'contracts_snapshot') }}
-where filename not like '%.tmp%'
-qualify ingest_date = max(ingest_date) over (partition by id_contrato)
+    a.id_contrato,
+    a.first_seen_date,
+    case
+        when e.change_type = 'disappeared' then e.prev_ingest_date
+        else (select max(ingest_date) from {{ ref('stg_contract_changes') }})
+    end as last_seen_date,
+    a.referencia_del_contrato,
+    a.proceso_de_compra,
+    a.urlproceso,
+    a.tipo_de_contrato,
+    a.modalidad_de_contratacion,
+    a.origen_de_los_recursos,
+    a.fecha_de_firma,
+    a.fecha_de_inicio_del_contrato,
+    a.codigo_entidad,
+    a.nit_entidad,
+    a.nombre_entidad,
+    a.departamento,
+    a.ciudad,
+    a.orden,
+    a.sector,
+    a.rama,
+    a.entidad_centralizada,
+    a.codigo_proveedor,
+    a.tipodocproveedor,
+    a.proveedor_adjudicado,
+    a.es_pyme,
+    a.es_grupo
+from attributes a
+left join last_events e on e.id_contrato = a.id_contrato

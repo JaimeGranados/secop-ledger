@@ -4,9 +4,24 @@ Run:  uv run python -m secop_ledger.silver.build [--date YYYY-MM-DD | --all]
       (default: every raw day that has no silver yet)
 
 For each day:
-    raw (text) ──► typed + cleaned ──► contracts_snapshot   (one row per contract, flags, row_hash)
+    raw (text) ──► typed + cleaned ──► contracts_snapshot   NARROW: every contract, only what is
+                                  │                         compared every day (tracked columns,
+                                  │                         flags, row_hash, full_hash)
+                                  ├──► contracts_attributes DELTA: the full row, only for contracts
+                                  │                         that are new or changed in ANY column
+                                  │                         since the previous snapshot (day 1: all)
                                   └──► contracts_quarantine (unusable rows + reason)
-    and the reconciliation must hold:  raw = snapshot + quarantine + duplicate copies removed
+    and the reconciliations must hold:
+        raw = snapshot + quarantine + duplicate copies removed
+        attribute rows = contracts that are new or have a different full_hash
+
+Why two tables: about 95% of the contracts are the same as yesterday. The narrow snapshot
+(~120 MB/day) is what change detection needs; the long texts are stored only when they change
+(~18 MB/day instead of 466 MB). The newest attribute row of each contract = its current full row
+(dbt test assert_attributes_match_latest_snapshot checks it every day with full_hash).
+
+Days depend on each other now (the delta compares with the previous snapshot): build them oldest
+first. `--all` does that.
 
 Exit codes:
     0  OK
@@ -43,6 +58,26 @@ FLAGS = (
     "flag_end_before_start",
 )
 
+# The narrow daily snapshot: what change detection, the daily quality counts and the dbt
+# reconciliation tests read. No long texts.
+SNAPSHOT_COLUMNS: tuple[str, ...] = (
+    "id_contrato",
+    *rules.TRACKED_COLUMNS,
+    "estado_grupo",
+    "ultima_actualizacion",
+    *FLAGS,
+    "row_hash",
+    "full_hash",
+)
+
+# Every column of the row, with the RAW status text (a fix of "terminado" → "Terminado" is a
+# change of the attributes, even if it is not a business change). Not socrata_id: the source gives
+# every row a new id on each reload, so with it every contract would look changed every time.
+FULL_HASH_COLUMNS: tuple[str, ...] = (
+    *(c for c in SELECTED_COLUMNS if c != "estado_contrato"),
+    "estado_contrato_raw",
+)
+
 
 class UnknownStatusError(Exception):
     pass
@@ -50,6 +85,10 @@ class UnknownStatusError(Exception):
 
 class ReconciliationError(Exception):
     pass
+
+
+class OldLayoutError(Exception):
+    """The previous snapshot was written before the narrow layout (it has no full_hash)."""
 
 
 # --- Paths ---------------------------------------------------------------------------------------
@@ -67,6 +106,15 @@ def raw_days(data_dir: Path) -> list[date]:
     return sorted(
         date.fromisoformat(p.name.split("=")[1]) for p in folders if not p.name.endswith(".tmp")
     )
+
+
+def previous_snapshot_day(data_dir: Path, day: date) -> date | None:
+    """The newest published silver snapshot before `day` (after a gap, an older day)."""
+    folders = (data_dir / "silver" / "contracts_snapshot").glob("ingest_date=*")
+    days = [
+        date.fromisoformat(p.name.split("=")[1]) for p in folders if not p.name.endswith(".tmp")
+    ]
+    return max((d for d in days if d < day), default=None)
 
 
 # --- SQL pieces (built from rules.py, so the SQL never hard-codes a column list) ----------------
@@ -188,29 +236,68 @@ def build_day(data_dir: Path, day: date) -> dict[str, Any]:
         FROM checks
     """)
 
+    prev = previous_snapshot_day(data_dir, day)
     snap_tmp, snap_final = _staging(data_dir, "contracts_snapshot", day)
+    attr_tmp, attr_final = _staging(data_dir, "contracts_attributes", day)
     quar_tmp, quar_final = _staging(data_dir, "contracts_quarantine", day)
 
-    # 4. The snapshot: clean status, flags, and row_hash (on the CLEAN status, so a change from
-    #    "terminado" to "Terminado" is not a change).
+    # 4. The clean rows (a view: computed while writing, never stored twice): clean status,
+    #    flags, row_hash (7 tracked columns, on the CLEAN status, so "terminado" → "Terminado" is
+    #    not a change) and full_hash (every column except socrata_id: any change at all).
     con.sql(f"""
-        COPY (
-            SELECT *, {row_hash_expr(rules.TRACKED_COLUMNS)} AS row_hash
-            FROM (
-                SELECT t.* EXCLUDE (reasons, estado_contrato),
-                       m.estado AS estado_contrato,
-                       m.estado_grupo,
-                       t.estado_contrato AS estado_contrato_raw,
-                       {flags_select()}
-                FROM typed t
-                JOIN decision d USING (socrata_id)
-                JOIN status_map m ON lower(t.estado_contrato) = m.raw_key
-                WHERE d.decision = 'keep'
-            )
-        ) TO '{(snap_tmp / "part-00000.parquet").as_posix()}' (FORMAT parquet, COMPRESSION zstd)
+        CREATE VIEW clean AS
+        SELECT *,
+               {row_hash_expr(rules.TRACKED_COLUMNS)} AS row_hash,
+               {row_hash_expr(FULL_HASH_COLUMNS)} AS full_hash
+        FROM (
+            SELECT t.* EXCLUDE (reasons, estado_contrato),
+                   m.estado AS estado_contrato,
+                   m.estado_grupo,
+                   t.estado_contrato AS estado_contrato_raw,
+                   {flags_select()}
+            FROM typed t
+            JOIN decision d USING (socrata_id)
+            JOIN status_map m ON lower(t.estado_contrato) = m.raw_key
+            WHERE d.decision = 'keep'
+        )
     """)
 
-    # 5. Quarantine: the original raw row (as text) + why it was rejected.
+    # 5a. The NARROW snapshot: every contract, only the columns that are compared every day.
+    snap_file = (snap_tmp / "part-00000.parquet").as_posix()
+    con.sql(f"""
+        COPY (SELECT {", ".join(SNAPSHOT_COLUMNS)} FROM clean)
+        TO '{snap_file}' (FORMAT parquet, COMPRESSION zstd)
+    """)
+
+    # 5b. The attributes DELTA: the full row, only for contracts that are new or have ANY
+    #     column different from the previous snapshot (full_hash). The first day: every contract.
+    #     Compared on the narrow file just written, so the big rows are read only once more.
+    if prev is None:
+        con.sql(
+            f"CREATE TEMP TABLE delta_ids AS SELECT id_contrato FROM read_parquet('{snap_file}')"
+        )
+    else:
+        prev_file = (silver_dir(data_dir, "contracts_snapshot", prev) / "*.parquet").as_posix()
+        prev_columns = con.sql(f"DESCRIBE SELECT * FROM read_parquet('{prev_file}')").fetchall()
+        if "full_hash" not in {c[0] for c in prev_columns}:
+            raise OldLayoutError(
+                f"the snapshot of {prev} has the old layout (no full_hash): "
+                "rebuild every day, oldest first, with --all"
+            )
+        con.sql(f"""
+            CREATE TEMP TABLE delta_ids AS
+            SELECT c.id_contrato
+            FROM read_parquet('{snap_file}') c
+            LEFT JOIN read_parquet('{prev_file}') p USING (id_contrato)
+            WHERE p.id_contrato IS NULL OR p.full_hash <> c.full_hash
+        """)
+    attr_file = (attr_tmp / "part-00000.parquet").as_posix()
+    con.sql(f"""
+        COPY (SELECT * FROM clean SEMI JOIN delta_ids USING (id_contrato))
+        TO '{attr_file}' (FORMAT parquet, COMPRESSION zstd)
+    """)
+
+    # 6. Quarantine: the original raw row (as text) + why it was rejected.
     con.sql(f"""
         COPY (
             SELECT s.*,
@@ -221,22 +308,29 @@ def build_day(data_dir: Path, day: date) -> dict[str, Any]:
         ) TO '{(quar_tmp / "part-00000.parquet").as_posix()}' (FORMAT parquet, COMPRESSION zstd)
     """)
 
-    # 6. Reconciliation on what was really WRITTEN: every raw row is explained.
-    snap_file = (snap_tmp / "part-00000.parquet").as_posix()
+    # 7. Reconciliation on what was really WRITTEN: every raw row is explained, and the delta
+    #    has exactly one row per contract that needed one.
     quar_file = (quar_tmp / "part-00000.parquet").as_posix()
-    raw_rows, snapshot_rows, quarantine_rows, duplicates = con.sql(f"""
+    raw_rows, snapshot_rows, quarantine_rows, duplicates, attribute_rows, delta_ids = con.sql(f"""
         SELECT (SELECT count(*) FROM src),
                (SELECT count(*) FROM read_parquet('{snap_file}')),
                (SELECT count(*) FROM read_parquet('{quar_file}')),
-               (SELECT count(*) FROM decision WHERE decision = 'duplicate')
+               (SELECT count(*) FROM decision WHERE decision = 'duplicate'),
+               (SELECT count(*) FROM read_parquet('{attr_file}')),
+               (SELECT count(*) FROM delta_ids)
     """).fetchall()[0]
+    problems = []
     if snapshot_rows + quarantine_rows + duplicates != raw_rows:
-        for tmp in (snap_tmp, quar_tmp):
-            shutil.rmtree(tmp, ignore_errors=True)
-        raise ReconciliationError(
+        problems.append(
             f"raw {raw_rows} != snapshot {snapshot_rows} + quarantine {quarantine_rows} "
             f"+ duplicates removed {duplicates}"
         )
+    if attribute_rows != delta_ids:
+        problems.append(f"attribute rows {attribute_rows} != new or changed contracts {delta_ids}")
+    if problems:
+        for tmp in (snap_tmp, attr_tmp, quar_tmp):
+            shutil.rmtree(tmp, ignore_errors=True)
+        raise ReconciliationError("; ".join(problems))
 
     flag_sums = ", ".join(f"count(*) FILTER (WHERE {f})" for f in FLAGS)
     flag_values = con.sql(f"SELECT {flag_sums} FROM read_parquet('{snap_file}')").fetchall()[0]
@@ -247,8 +341,10 @@ def build_day(data_dir: Path, day: date) -> dict[str, Any]:
 
     manifest = {
         "ingest_date": day.isoformat(),
+        "prev_snapshot_date": prev.isoformat() if prev else None,
         "raw_rows": raw_rows,
         "snapshot_rows": snapshot_rows,
+        "attribute_rows": attribute_rows,
         "quarantine_rows": quarantine_rows,
         "duplicate_copies_removed": duplicates,
         "conflicting_duplicate_ids": con.sql("SELECT count(*) FROM conflicts").fetchall()[0][0],
@@ -260,13 +356,15 @@ def build_day(data_dir: Path, day: date) -> dict[str, Any]:
     (snap_tmp / "_manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    for tmp, final in ((snap_tmp, snap_final), (quar_tmp, quar_final)):
+    # The snapshot is published LAST: it is the marker that the day is built (days_to_build).
+    for tmp, final in ((attr_tmp, attr_final), (quar_tmp, quar_final), (snap_tmp, snap_final)):
         if final.exists():
             shutil.rmtree(final)
         tmp.rename(final)
     log.info(
-        "silver %s: %d raw = %d snapshot + %d quarantine + %d duplicates removed",
-        day, raw_rows, snapshot_rows, quarantine_rows, duplicates,
+        "silver %s: %d raw = %d snapshot + %d quarantine + %d duplicates removed; "
+        "%d attribute rows (new or changed vs %s)",
+        day, raw_rows, snapshot_rows, quarantine_rows, duplicates, attribute_rows, prev,
     )
     return manifest
 
