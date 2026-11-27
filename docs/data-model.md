@@ -51,7 +51,8 @@ contracts are tracked forever, also after 2025.
 | Layer | Table | Grain: one row = | Key |
 |---|---|---|---|
 | raw | `raw/contracts/ingest_date=YYYY-MM-DD/*.parquet` | one record **as the API returned it** on one ingestion day (may contain duplicates) | none (append only) |
-| silver | `contracts_snapshot` | one contract on one ingestion day | `id_contrato`, `ingest_date` |
+| silver | `contracts_snapshot` | one contract on one ingestion day — **narrow**: only the tracked columns, status group, `ultima_actualizacion`, flags, `row_hash` and `full_hash` | `id_contrato`, `ingest_date` |
+| silver | `contracts_attributes` | the **full typed row** of one contract on a day it was new or changed in **any** column (`full_hash`). Day 1: every contract. The newest row per contract = its current values. | `id_contrato`, `ingest_date` |
 | silver | `contracts_quarantine` | one rejected raw record on one ingestion day, with the reason | `ingest_date`, `socrata_id` |
 | silver | `contract_changes` | one contract that is **new, changed or disappeared** compared with the previous snapshot (the first day: every contract, as `baseline`). Unchanged contracts are not stored. Baseline + all events = the full history, so old full snapshots can be deleted. | `id_contrato`, `ingest_date` |
 | gold | `dim_contract` | one contract: what it is and who signed it (current values, SCD Type 1). Links `contract_history` to the other dims. | `id_contrato` |
@@ -66,8 +67,9 @@ contracts are tracked forever, also after 2025.
 `estado_contrato`, `valor_del_contrato`, `valor_facturado`, `valor_pagado`,
 `valor_pendiente_de_pago`, `dias_adicionados`, `fecha_de_fin_del_contrato`.
 
-A change in any other column (for example a typo fixed in the description) updates the snapshot but
-does **not** open a new version. Reason: versions must mean a business change, not noise.
+A change in any other column (for example a typo fixed in the description) writes a new row in
+`contracts_attributes` (so `dim_contract` shows the new text) but does **not** open a new version.
+Reason: versions must mean a business change, not noise.
 
 ### Change detection
 **Version 1: a full snapshot of the slice every day**, then a row hash of the tracked columns
@@ -93,6 +95,24 @@ Cost of the full pull: one 50,000-row page (all columns) took about 46 s, so the
 month, so raw needs a **retention policy**, decided with the silver layer: keep the first full
 snapshot plus a daily table of new or changed rows only, and delete full snapshots after about
 30 days.
+
+**Narrow snapshot + attributes delta (2026-11-27).** The download stays full (the source can't
+say what changed), but silver no longer stores every full row every day. Measured on real data:
+
+| | Before | After |
+|---|---|---|
+| Silver per day (11-26) | 466 MB (all 69 columns, 2,013,363 rows) | ~120 MB narrow snapshot + 18.5 MB attributes (−70%) (84,538 rows: 5,611 new + 78,927 changed) |
+| Rows that changed in any column, per day | — | 16,319 (11-23) to 125,779 (11-21, after a 2-day gap): 1–6% |
+
+- `full_hash` = every column **except `socrata_id`**: the source gives every row a new `:id` on each
+  reload, and with it all 2,013,363 rows looked changed.
+- The delta is exact, so there is no need for a weekly full snapshot: the dbt test
+  `assert_attributes_match_latest_snapshot` checks every day that the newest attribute row of each
+  contract has the same `full_hash` as the newest snapshot.
+- `int_contracts_latest` reads the delta (about 2M rows + ~5% per day) instead of every snapshot
+  (2M rows per day).
+- Days depend on each other (the delta compares with the previous snapshot), so silver is built
+  oldest first. A gap compares with the last snapshot we have, like change detection.
 
 Version 2 (an optimization, with a measured reason): add the incremental pull and compare it with
 the full snapshot. The result ("the watermark alone misses X% of the changes") goes in the README.

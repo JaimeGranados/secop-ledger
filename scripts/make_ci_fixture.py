@@ -10,6 +10,8 @@ exactly like on real data. Every case the pipeline has to handle appears at leas
                        F is new
     (missed)  2026-01-07
     day 3  2026-01-08  A is "Terminado"; C disappeared
+                       D: only its description was fixed (an untracked column): a new row in
+                       contracts_attributes, but no change event
 
 Suppliers: a company (NIT, its name may reach gold) and a person (Cédula, its name must not).
 
@@ -79,7 +81,12 @@ def day_rows() -> dict[date, list[dict[str, Any]]]:
     return {
         DAY_1: [a, b, c, d, {**d, ":id": "row-0099"}, contract(5, "E", id_contrato=None)],
         DAY_2: [a_paid, b_modified, c, d, f],
-        DAY_3: [{**a_paid, "estado_contrato": "Terminado"}, b_modified, d, f],
+        DAY_3: [
+            {**a_paid, "estado_contrato": "Terminado"},
+            b_modified,
+            {**d, "objeto_del_contrato": "Contrato de prueba (texto corregido)"},
+            f,
+        ],
     }
 
 

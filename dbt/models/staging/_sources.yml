@@ -20,10 +20,20 @@ sources:
             read_parquet('{{ env_var('SECOP_DATA_DIR', 'data') }}/silver/contract_changes/ingest_date=*[0-9]/*.parquet',
             filename = true)
       - name: contracts_snapshot
-        description: One row per contract per collected day (all columns, typed).
+        description: >
+          NARROW: one row per contract per collected day, only the columns compared every day
+          (7 tracked columns, status group, ultima_actualizacion, flags, row_hash, full_hash).
         meta:
           external_location: >-
             read_parquet('{{ env_var('SECOP_DATA_DIR', 'data') }}/silver/contracts_snapshot/ingest_date=*[0-9]/*.parquet',
+            filename = true)
+      - name: contracts_attributes
+        description: >
+          DELTA: the full typed row, only on the days a contract is new or changed in any column
+          (full_hash). Day 1 has every contract. The newest row per contract = its current values.
+        meta:
+          external_location: >-
+            read_parquet('{{ env_var('SECOP_DATA_DIR', 'data') }}/silver/contracts_attributes/ingest_date=*[0-9]/*.parquet',
             filename = true)
       - name: contracts_quarantine
         description: Raw rows that could not be used, with the reason (one file per day, often empty).
